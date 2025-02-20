@@ -16,10 +16,6 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-type hpkeKEMID uint16
-type hpkeKDFID uint16
-type hpkeAEADID uint16
-
 type hpkeCiphersuite struct {
 	kdfID  uint16
 	aeadID uint16
@@ -30,6 +26,24 @@ type hpkeKeyConfig struct {
 	kemID        uint16
 	publicKey    []byte            `tls:"uint16prefixed"`
 	ciphersuites []hpkeCiphersuite `tls:"uint16prefixed"`
+}
+
+type echConfigExtension struct {
+	extensionType uint16
+	data          []byte `tls:"uint16prefixed"`
+}
+
+type echConfigContents struct {
+	keyConfig         hpkeKeyConfig
+	maximumNameLength uint8
+	publicName        []byte               `tls:"uint8prefixed"`
+	extensions        []echConfigExtension `tls:"uint16prefixed"`
+}
+
+type echConfig struct {
+	version  uint16
+	length   uint16
+	contents echConfigContents
 }
 
 type tlsFieldType int
@@ -43,6 +57,7 @@ const (
 	tlsUint64
 	tlsBytes
 	tlsSlice
+	tlsStruct
 )
 
 type field struct {
@@ -88,6 +103,8 @@ func generateFromFields(fields []field, buf *bytes.Buffer, inputName, outputName
 			fmt.Fprintf(buf, "var %s cryptobyte.String\nif !%s.ReadUint%dLengthPrefixed(&%s) {\nreturn nil, errors.New(\"malformed\")\n}\nfor !%s.Empty() {\nvar single_%s %s\n", field.name, inputName, field.lengthPrefix, field.name, field.name, field.name, field.elemName)
 			generateFromFields(field.fields, buf, field.name, "single_"+field.name)
 			fmt.Fprintf(buf, "%s.%s = append(%s.%s, single_%s)\n}\n", outputName, field.name, outputName, field.name, field.name)
+		case tlsStruct:
+			generateFromFields(field.fields, buf, inputName, fmt.Sprintf("%s.%s", outputName, field.name))
 		default:
 			log.Fatal("unsupported?")
 		}
@@ -173,7 +190,8 @@ func structFields(s *types.Struct) []field {
 		case *types.Basic:
 			typeField.typ = basicToFieldType(t)
 		case *types.Struct:
-			log.Fatal("???")
+			typeField.typ = tlsStruct
+			typeField.fields = structFields(t)
 		case *types.Slice:
 			switch et := t.Elem().Underlying().(type) {
 			case *types.Basic:
@@ -211,7 +229,7 @@ func structFields(s *types.Struct) []field {
 }
 
 func main() {
-	ts := []string{"hpkeKeyConfig"}
+	ts := []string{"echConfig"}
 	patterns := []string{"."}
 	tags := []string{}
 
